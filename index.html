@@ -240,7 +240,7 @@ function spawnCritter() {
   let y = Math.max(30, Math.min(WH-30, gs.py + Math.sin(angle)*d));
   let roll = Math.random();
   let type = roll < 0.12 ? 'tarantula' : roll < 0.28 ? 'superworm' : roll < 0.64 ? 'cricket' : 'roach';
-  let spd = type==='cricket' ? rnd(0.6,1.6) : type==='roach' ? rnd(0.4,1.1) : type==='superworm' ? rnd(0.3,0.8) : rnd(0.8,1.8);
+  let spd = type==='cricket' ? rnd(0.6,1.6) : type==='roach' ? rnd(0.4,1.1) : type==='superworm' ? rnd(0.3,0.8) : rnd(0.72,1.62);
   gs.critters.push({
     type, x, y,
     angle: rnd(0,Math.PI*2),
@@ -548,7 +548,7 @@ function updateBasking(dt) {
 function startDash(durMult=1,spdMult=1) {
   if (gs.burrowState!=='none') return;
   if (gs.thermal<=0 && !gs.basking) return;
-  gs.dashing=true; gs.dashTime=0.35*durMult; gs.dashDir=gs.pAngle; gs.dashSpd=spdMult;
+  gs.dashing=true; gs.dashTime=0.245*durMult; gs.dashDir=gs.pAngle; gs.dashSpd=spdMult;
   if (!gs.basking) gs.thermal=Math.max(0,gs.thermal-15);
   spawnParticles(gs.px,gs.py,5,gs.venomActive?'#8c3cc8':'#4488ff');
 }
@@ -586,12 +586,14 @@ function updateTongue(dt) {
   if (!gs.tongueOut) return;
   if (!gs.tongueRetract) {
     gs.tongueLen+=300*dt;
-    if (gs.tongueLen>=50) { gs.tongueLen=50; gs.tongueRetract=true; }
-    let tx=gs.px+Math.cos(gs.pAngle)*gs.tongueLen;
-    let ty=gs.py+Math.sin(gs.pAngle)*gs.tongueLen;
+    if (gs.tongueLen>=13) { gs.tongueLen=13; gs.tongueRetract=true; }
+    // Tongue tip in world space: head is 38px ahead of player centre, scaled by drgSize
+    let tipDist=(38+gs.tongueLen)*gs.drgSize;
+    let tx=gs.px+Math.cos(gs.pAngle)*tipDist;
+    let ty=gs.py+Math.sin(gs.pAngle)*tipDist;
     for (let i=gs.critters.length-1;i>=0;i--) {
       let c=gs.critters[i];
-      let r=c.type==='tarantula'?22:18;
+      let r=c.type==='tarantula'?16:13;
       if (dist(tx,ty,c.x,c.y)<r) {
         if (c.type==='tarantula'&&c.hp>1) { c.hp--; c.wounded=true; c.woundAngle=rnd(0,Math.PI*2); spawnParticles(c.x,c.y,5,'#8B4513'); }
         else eatCritter(i);
