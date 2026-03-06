@@ -224,6 +224,8 @@ function initGame() {
     particles: [], splats: [],
     // timers
     snakeSpawnT: rnd(2,4), hawkSpawnT: rnd(10,18),
+    // snake venom (from bite)
+    snakeVenomed: false, snakeVenomTime: 0, snakeVenomDmgT: 0,
   };
   for (let i = 0; i < 12; i++) spawnCritter();
   updateHUD();
@@ -283,62 +285,140 @@ function updateCritters(dt) {
 // SNAKES
 // ================================================================
 function spawnSnake() {
-  let angle=rnd(0,Math.PI*2), d=rnd(400,600);
-  let x=Math.max(50,Math.min(WW-50,gs.px+Math.cos(angle)*d));
-  let y=Math.max(50,Math.min(WH-50,gs.py+Math.sin(angle)*d));
+  // Spawn at edge of a basking rock — ambush predator behaviour
+  let rock = baskRocks.length>0 ? baskRocks[rndI(0,baskRocks.length-1)] : null;
+  let x, y;
+  if (rock) {
+    let a=rnd(0,Math.PI*2);
+    x=Math.max(50,Math.min(WW-50, rock.x+Math.cos(a)*(rock.w*0.5+8)));
+    y=Math.max(50,Math.min(WH-50, rock.y+Math.sin(a)*(rock.h*0.5+8)));
+  } else {
+    let a=rnd(0,Math.PI*2), d=rnd(400,600);
+    x=Math.max(50,Math.min(WW-50,gs.px+Math.cos(a)*d));
+    y=Math.max(50,Math.min(WH-50,gs.py+Math.sin(a)*d));
+  }
   let segs=[];
   for (let i=0;i<20;i++) segs.push({x:x-i*14,y});
-  gs.snakes.push({ x,y,angle:0, segs, spd:rnd(2.2,3.5), state:'wander', stateT:rnd(2,5), biteT:0, sinePhase:0, fleeT:0, wanderAngle:0 });
+  gs.snakes.push({
+    x,y, angle:rnd(0,Math.PI*2), segs, spd:rnd(2.2,3.5),
+    state:'ambush', stateT:0,
+    biteT:0, sinePhase:0, fleeT:0, wanderAngle:rnd(0,Math.PI*2),
+    ambushRock:rock,
+    strikeX:x, strikeY:y,
+    tongueFlick:false,
+  });
 }
 
 function updateSnakes(dt) {
-  gs.snakeSpawnT -= dt;
-  if (gs.snakeSpawnT<=0 && gs.snakes.length<4) { spawnSnake(); gs.snakeSpawnT=rnd(2,4); }
+  gs.snakeSpawnT-=dt;
+  if (gs.snakeSpawnT<=0 && gs.snakes.length<4) { spawnSnake(); gs.snakeSpawnT=rnd(3,6); }
+
+  let cold=gs.thermal<=0;
+  let burrowed=gs.burrowState==='burrowed';
+  // Cold beardie = heat-blind snake, only detects at near-contact distance
+  let detRange=cold?45:180;
+
   for (let i=gs.snakes.length-1;i>=0;i--) {
     let s=gs.snakes[i];
-    if (dist(s.x,s.y,gs.px,gs.py)>800) { gs.snakes.splice(i,1); continue; }
-    s.biteT = Math.max(0,s.biteT-dt);
-    s.sinePhase += dt*3;
-    // Threat scare
-    if (gs.threatActive && dist(s.x,s.y,gs.px,gs.py)<120*gs.drgSize) s.fleeT=3;
+    if (dist(s.x,s.y,gs.px,gs.py)>900) { gs.snakes.splice(i,1); continue; }
+    s.biteT=Math.max(0,s.biteT-dt);
+    s.sinePhase+=dt*3;
+    s.tongueFlick=false;
+
+    // Threat display — always flee
+    if (gs.threatActive && dist(s.x,s.y,gs.px,gs.py)<120*gs.drgSize) {
+      s.state='flee'; s.fleeT=4;
+    }
+
     if (s.fleeT>0) {
       s.fleeT-=dt;
       let fa=Math.atan2(s.y-gs.py,s.x-gs.px);
-      s.angle += angDiff(s.angle,fa)*0.15;
+      s.angle+=angDiff(s.angle,fa)*0.15;
       s.x=Math.max(20,Math.min(WW-20,s.x+Math.cos(s.angle)*4));
       s.y=Math.max(20,Math.min(WH-20,s.y+Math.sin(s.angle)*4));
+      if (s.fleeT<=0) s.state='ambush';
     } else {
-      s.stateT-=dt;
       let toP=dist(s.x,s.y,gs.px,gs.py);
-      if (s.stateT<=0||toP<220) { s.state=toP<260?'chase':(Math.random()<0.5?'chase':'wander'); s.stateT=rnd(2,5); }
-      let ta;
-      if (s.state==='chase') ta=Math.atan2(gs.py-s.y,gs.px-s.x);
-      else { if (Math.random()<0.01) s.wanderAngle=rnd(0,Math.PI*2); ta=s.wanderAngle; }
-      let desired=ta+Math.sin(s.sinePhase)*0.4;
-      s.angle+=angDiff(s.angle,desired)*0.1;
-      s.x=Math.max(20,Math.min(WW-20,s.x+Math.cos(s.angle)*s.spd));
-      s.y=Math.max(20,Math.min(WH-20,s.y+Math.sin(s.angle)*s.spd));
+
+      if (s.state==='ambush') {
+        // Drift slowly back toward rock, occasional tongue flick
+        s.tongueFlick=Math.sin(s.sinePhase*1.5)>0.75;
+        if (s.ambushRock) {
+          let toRock=dist(s.x,s.y,s.ambushRock.x,s.ambushRock.y);
+          if (toRock>25) {
+            let ta=Math.atan2(s.ambushRock.y-s.y,s.ambushRock.x-s.x);
+            s.angle+=angDiff(s.angle,ta)*0.06;
+            s.x=Math.max(20,Math.min(WW-20,s.x+Math.cos(s.angle)*0.9));
+            s.y=Math.max(20,Math.min(WH-20,s.y+Math.sin(s.angle)*0.9));
+          }
+        }
+        // Burrowed = invisible; otherwise detect by heat signature
+        if (!burrowed && toP<detRange) { s.state='alert'; s.stateT=0.5; }
+
+      } else if (s.state==='alert') {
+        // Face player, rapid tongue flick — brief pause before coil
+        s.tongueFlick=true;
+        let ta=Math.atan2(gs.py-s.y,gs.px-s.x);
+        s.angle+=angDiff(s.angle,ta)*0.3;
+        s.stateT-=dt;
+        if (burrowed||toP>detRange*1.5) { s.state='ambush'; }
+        else if (s.stateT<=0) { s.state='coil'; s.stateT=0.3; }
+
+      } else if (s.state==='coil') {
+        // Barely moves, tongue flicks fast — telegraphs strike
+        s.tongueFlick=true;
+        s.stateT-=dt;
+        if (burrowed) { s.state='ambush'; }
+        else if (s.stateT<=0) {
+          // Lock target — snake lunges at where player IS now, not where they go
+          s.strikeX=gs.px; s.strikeY=gs.py;
+          s.state='strike'; s.stateT=0.45;
+        }
+
+      } else if (s.state==='strike') {
+        // Fast straight lunge — no homing, player can sidestep
+        let ta=Math.atan2(s.strikeY-s.y,s.strikeX-s.x);
+        s.angle+=angDiff(s.angle,ta)*0.25;
+        s.x=Math.max(20,Math.min(WW-20,s.x+Math.cos(s.angle)*9));
+        s.y=Math.max(20,Math.min(WH-20,s.y+Math.sin(s.angle)*9));
+        s.stateT-=dt;
+
+        if (s.biteT===0 && gs.iframes===0 && !burrowed) {
+          let hd=dist(s.x,s.y,gs.px,gs.py);
+          if (hd<62) {
+            if (gs.venomActive && gs.dashing && hd<52) {
+              gs.score+=75; spawnParticles(s.x,s.y,12,'#8c3cc8'); gs.snakes.splice(i,1); continue;
+            }
+            let dmg=enemyDmg(15);
+            gs.hp=Math.max(0,gs.hp-dmg);
+            gs.iframes=1.0; s.biteT=1.5;
+            // Inject snake venom — green strobe + slow + tick damage
+            gs.snakeVenomed=true; gs.snakeVenomTime=5; gs.snakeVenomDmgT=0;
+            let ka=Math.atan2(gs.py-s.y,gs.px-s.x)+Math.PI;
+            gs.knockVx+=Math.cos(ka)*10; gs.knockVy+=Math.sin(ka)*10;
+            spawnParticles(gs.px,gs.py,10,'#40c840');
+            s.state='retreat'; s.stateT=2.2;
+          }
+        }
+        if (s.stateT<=0) { s.state='retreat'; s.stateT=2.2; }
+
+      } else if (s.state==='retreat') {
+        // Back away from player, return to rock
+        let fa=Math.atan2(s.y-gs.py,s.x-gs.px);
+        s.angle+=angDiff(s.angle,fa)*0.12;
+        s.x=Math.max(20,Math.min(WW-20,s.x+Math.cos(s.angle)*3));
+        s.y=Math.max(20,Math.min(WH-20,s.y+Math.sin(s.angle)*3));
+        s.stateT-=dt;
+        if (s.stateT<=0) s.state='ambush';
+      }
     }
+
+    // Segment chain follow
     s.segs[0].x=s.x; s.segs[0].y=s.y;
     for (let j=1;j<s.segs.length;j++) {
       let p=s.segs[j-1],cur=s.segs[j];
       let d2=dist(cur.x,cur.y,p.x,p.y);
       if (d2>14) { let a=Math.atan2(cur.y-p.y,cur.x-p.x); cur.x=p.x+Math.cos(a)*14; cur.y=p.y+Math.sin(a)*14; }
-    }
-    // Bite
-    if (s.biteT===0 && gs.iframes===0 && gs.burrowState!=='burrowed') {
-      let hd=dist(s.x,s.y,gs.px,gs.py);
-      if (hd<62) {
-        // Venom dash kill
-        if (gs.venomActive && gs.dashing && hd<52) {
-          gs.score+=75; spawnParticles(s.x,s.y,12,'#8c3cc8'); gs.snakes.splice(i,1); continue;
-        }
-        let dmg=enemyDmg(15);
-        gs.hp=Math.max(0,gs.hp-dmg); gs.iframes=1.0; s.biteT=1.2;
-        let ka=Math.atan2(gs.py-s.y,gs.px-s.x)+Math.PI;
-        gs.knockVx+=Math.cos(ka)*10; gs.knockVy+=Math.sin(ka)*10;
-        spawnParticles(gs.px,gs.py,8,'#e03030');
-      }
     }
   }
 }
@@ -415,7 +495,8 @@ function updatePlayer(dt) {
   let {dx,dy}=getJoyInput();
   let mag=Math.hypot(dx,dy);
   let cold=gs.thermal<=0;
-  let maxSpd = gs.dashing ? 12*gs.dashSpd : cold ? 1.2 : 3;
+  let venomSlow=gs.snakeVenomed?0.62:1.0;
+  let maxSpd = gs.dashing ? 12*gs.dashSpd : cold ? 1.2 : 3*venomSlow;
   if (gs.threatActive) maxSpd*=0.3;
 
   if (gs.dashing) {
@@ -543,6 +624,21 @@ function updateVenom(dt) {
   if (!gs.venomActive) return;
   gs.venomTime-=dt;
   if (gs.venomTime<=0) gs.venomActive=false;
+}
+
+function updateSnakeVenom(dt) {
+  if (!gs.snakeVenomed) return;
+  gs.snakeVenomTime-=dt;
+  gs.snakeVenomDmgT+=dt;
+  // 4 damage ticks over 5 seconds (~20 total damage)
+  if (gs.snakeVenomDmgT>=1.25) {
+    gs.snakeVenomDmgT=0;
+    gs.hp=Math.max(0,gs.hp-4);
+    spawnParticles(gs.px,gs.py,4,'#40c840');
+  }
+  if (gs.snakeVenomTime<=0) {
+    gs.snakeVenomed=false; gs.snakeVenomTime=0; gs.snakeVenomDmgT=0;
+  }
 }
 
 function checkSquish() {
@@ -829,15 +925,20 @@ function drawCritter(c) {
 function drawSnake(s) {
   if (!s.segs||!s.segs.length) return;
   ctx.save();
+  // Rear segments fade out during ambush — looks like tail tucked under rock
+  let ambushHide=s.state==='ambush'||s.state==='alert';
   for (let i=s.segs.length-1;i>=0;i--) {
     let seg=s.segs[i];
     let r2=i<3?7+i:14, col;
     if (i<3) col=i%2===0?'#d4c896':'#b8a878';
     else col=(i%4<2)?'#8a7040':'#5a4028';
+    if (ambushHide&&i>10) ctx.globalAlpha=Math.max(0.1,1-((i-10)/8)*0.85);
+    else ctx.globalAlpha=1;
     ctx.fillStyle=col; ctx.beginPath(); ctx.arc(seg.x,seg.y,r2,0,Math.PI*2); ctx.fill();
     if (i>=3&&i%2===0) { ctx.fillStyle='rgba(60,40,10,0.45)'; ctx.beginPath(); ctx.arc(seg.x,seg.y,5,0,Math.PI*2); ctx.fill(); }
     if (i>=3) { ctx.fillStyle='rgba(40,20,5,0.35)'; ctx.beginPath(); ctx.arc(seg.x+9,seg.y,2,0,Math.PI*2); ctx.arc(seg.x-9,seg.y,2,0,Math.PI*2); ctx.fill(); }
   }
+  ctx.globalAlpha=1;
   let h=s.segs[0];
   ctx.save(); ctx.translate(h.x,h.y); ctx.rotate(s.angle);
   ctx.fillStyle='#6a5030'; ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.fill();
@@ -845,9 +946,18 @@ function drawSnake(s) {
   ctx.fillStyle='#d4a020'; ctx.beginPath(); ctx.arc(-4,-7,5,0,Math.PI*2); ctx.arc(-4,7,5,0,Math.PI*2); ctx.fill();
   ctx.fillStyle='#0a0500'; ctx.beginPath(); ctx.arc(-4,-7,2,0,Math.PI*2); ctx.arc(-4,7,2,0,Math.PI*2); ctx.fill();
   ctx.fillStyle='#1a0a00'; ctx.beginPath(); ctx.arc(5,-5,2,0,Math.PI*2); ctx.arc(5,5,2,0,Math.PI*2); ctx.fill();
-  if (Math.sin(Date.now()/180)>0.2) {
+  // Tongue flick rate scales with aggression state
+  let tf = s.tongueFlick || Math.sin(Date.now()/180)>0.2;
+  if (s.state==='coil') tf=Math.sin(Date.now()/55)>0;
+  if (tf) {
     ctx.strokeStyle='#cc2020'; ctx.lineWidth=1.5;
     ctx.beginPath(); ctx.moveTo(16,0); ctx.lineTo(24,0); ctx.lineTo(28,-4); ctx.moveTo(24,0); ctx.lineTo(28,4); ctx.stroke();
+  }
+  // Red warning glow when coiling to strike
+  if (s.state==='coil') {
+    let p=0.5+0.5*Math.sin(Date.now()/80);
+    ctx.strokeStyle=`rgba(220,60,20,${0.5+p*0.4})`; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(0,0,20+p*4,0,Math.PI*2); ctx.stroke();
   }
   ctx.restore(); ctx.restore();
 }
@@ -966,11 +1076,24 @@ function drawPlayer(g) {
     ctx.fillStyle='#f0b8a0'; ctx.beginPath(); ctx.arc(24+g.tongueLen,0,3,0,Math.PI*2); ctx.fill();
   }
 
-  // Venom aura
+  // Tarantula venom aura (purple)
   if (g.venomActive) {
     let pulse=0.5+0.5*Math.sin(Date.now()/200);
     ctx.strokeStyle=`rgba(140,60,200,${0.4+pulse*0.3})`; ctx.lineWidth=3;
     ctx.beginPath(); ctx.arc(0,0,18+pulse*4,0,Math.PI*2); ctx.stroke();
+  }
+
+  // Snake venom — green strobing disorientation effect
+  if (g.snakeVenomed) {
+    let strobe=0.5+0.5*Math.sin(Date.now()/110);
+    ctx.fillStyle=`rgba(40,200,80,${strobe*0.5})`;
+    ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.fill();
+    ctx.save(); ctx.translate(14,0);
+    ctx.fillStyle=`rgba(40,200,80,${strobe*0.5})`;
+    ctx.beginPath(); ctx.arc(0,0,12,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle=`rgba(40,220,80,${0.3+strobe*0.4})`; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(0,0,20+strobe*6,0,Math.PI*2); ctx.stroke();
   }
 
   // Dash trail
@@ -1146,6 +1269,7 @@ function loop(ts) {
       updateVenom(dt);
       updateCritters(dt);
       updateSnakes(dt);
+      updateSnakeVenom(dt);
       updateHawk(dt);
       checkCacti();
       checkSquish();
