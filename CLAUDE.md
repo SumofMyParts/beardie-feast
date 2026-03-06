@@ -24,3 +24,10 @@ Update as the project structure grows.
 
 ## Conventions
 - Add any code style, naming, or workflow conventions here.
+
+## Git Workflow
+- **Always** commit and push changes to the `main` branch on the remote after every meaningful change.
+- Commits must be done in manageable, logical chunks — one feature, fix, or concern per commit. Do not bundle unrelated changes together.
+- Write descriptive commit messages that explain **what** changed and **why**, not just "update file". Use the imperative mood (e.g. "Add player movement logic", "Fix collision detection bug").
+- After every commit, run `git push origin main` to keep the remote in sync.
+- Never leave uncommitted changes at the end of a session.
