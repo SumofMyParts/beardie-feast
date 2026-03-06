@@ -226,6 +226,7 @@ function initGame() {
     snakeSpawnT: rnd(2,4), hawkSpawnT: rnd(10,18),
     // snake venom (from bite)
     snakeVenomed: false, snakeVenomTime: 0, snakeVenomDmgT: 0,
+    shakeAmt: 0,
   };
   for (let i = 0; i < 12; i++) spawnCritter();
   updateHUD();
@@ -394,6 +395,7 @@ function updateSnakes(dt) {
             gs.iframes=1.0; s.biteT=1.5;
             // Inject snake venom — green strobe + slow + tick damage
             gs.snakeVenomed=true; gs.snakeVenomTime=5; gs.snakeVenomDmgT=0;
+            gs.shakeAmt=Math.max(gs.shakeAmt,0.9);
             let ka=Math.atan2(gs.py-s.y,gs.px-s.x)+Math.PI;
             gs.knockVx+=Math.cos(ka)*10; gs.knockVy+=Math.sin(ka)*10;
             spawnParticles(gs.px,gs.py,10,'#40c840');
@@ -454,7 +456,7 @@ function updateHawk(dt) {
     h.x+=Math.cos(h.angle)*6; h.y+=Math.sin(h.angle)*6;
     if (h.altitude<0.3 && dist(h.x,h.y,gs.px,gs.py)<55 && gs.iframes===0 && gs.burrowState!=='burrowed') {
       h.phase='carry'; h.carryTimer=2.0; h.tickTimer=0; h.carrying=true;
-      gs.iframes=0.3; gs.mashCount=0; gs.mashRequired=rndI(3,5);
+      gs.iframes=0.3; gs.mashCount=0; gs.mashRequired=rndI(3,5); gs.shakeAmt=Math.max(gs.shakeAmt,0.7);
       gs.hp=Math.max(0,gs.hp-enemyDmg(12));
       spawnParticles(gs.px,gs.py,8,'#e03030');
     }
@@ -643,6 +645,11 @@ function updateSnakeVenom(dt) {
   }
 }
 
+function updateScreenShake(dt) {
+  if (!gs||!gs.shakeAmt) return;
+  gs.shakeAmt=Math.max(0,gs.shakeAmt-dt*7);
+}
+
 function checkSquish() {
   if (gs.burrowState==='burrowed') return;
   for (let i=gs.critters.length-1;i>=0;i--) {
@@ -662,6 +669,7 @@ function checkCacti() {
       let ka=Math.atan2(gs.py-cac.y,gs.px-cac.x);
       gs.knockVx+=Math.cos(ka)*12; gs.knockVy+=Math.sin(ka)*12;
       spawnParticles(gs.px,gs.py,6,'#e03030');
+      gs.shakeAmt=Math.max(gs.shakeAmt,1.0);
     }
   }
 }
@@ -784,6 +792,17 @@ document.getElementById('replayBtn').addEventListener('click',startGame);
 // ================================================================
 // RENDERING
 // ================================================================
+function drawShadow(x,y,rx,ry,alpha) {
+  // Ground shadow — sun from upper-left, shadow offset lower-right
+  ctx.save();
+  ctx.translate(x+rx*0.28, y+ry*0.28+4);
+  ctx.scale(1,0.32);
+  ctx.beginPath(); ctx.arc(0,0,rx,0,Math.PI*2);
+  ctx.fillStyle=`rgba(0,0,0,${alpha||0.22})`;
+  ctx.fill();
+  ctx.restore();
+}
+
 // Deterministic pseudo-random for grass
 function detRnd(seed,min,max) { let s=Math.sin(seed*127.1)*43758.5453; return min+(s-Math.floor(s))*(max-min); }
 
@@ -926,36 +945,99 @@ function drawCritter(c) {
 
 function drawSnake(s) {
   if (!s.segs||!s.segs.length) return;
-  ctx.save();
-  // Rear segments fade out during ambush — looks like tail tucked under rock
+  let segs=s.segs, n=segs.length;
   let ambushHide=s.state==='ambush'||s.state==='alert';
-  for (let i=s.segs.length-1;i>=0;i--) {
-    let seg=s.segs[i];
-    let r2=i<3?7+i:14, col;
-    if (i<3) col=i%2===0?'#d4c896':'#b8a878';
-    else col=(i%4<2)?'#8a7040':'#5a4028';
-    if (ambushHide&&i>10) ctx.globalAlpha=Math.max(0.1,1-((i-10)/8)*0.85);
-    else ctx.globalAlpha=1;
-    ctx.fillStyle=col; ctx.beginPath(); ctx.arc(seg.x,seg.y,r2,0,Math.PI*2); ctx.fill();
-    if (i>=3&&i%2===0) { ctx.fillStyle='rgba(60,40,10,0.45)'; ctx.beginPath(); ctx.arc(seg.x,seg.y,5,0,Math.PI*2); ctx.fill(); }
-    if (i>=3) { ctx.fillStyle='rgba(40,20,5,0.35)'; ctx.beginPath(); ctx.arc(seg.x+9,seg.y,2,0,Math.PI*2); ctx.arc(seg.x-9,seg.y,2,0,Math.PI*2); ctx.fill(); }
+  ctx.save();
+  if (ambushHide) ctx.globalAlpha=0.65;
+
+  // ── Smooth bezier body silhouette ──────────────────────────────
+  ctx.lineCap='round'; ctx.lineJoin='round';
+
+  // Base body — full path tail→head
+  ctx.beginPath();
+  ctx.moveTo(segs[n-1].x, segs[n-1].y);
+  for (let i=n-2;i>=1;i--) {
+    let mx=(segs[i].x+segs[i-1].x)/2, my=(segs[i].y+segs[i-1].y)/2;
+    ctx.quadraticCurveTo(segs[i].x,segs[i].y,mx,my);
   }
+  ctx.lineTo(segs[0].x,segs[0].y);
+  ctx.strokeStyle='#6b5228'; ctx.lineWidth=28; ctx.stroke();
+
+  // Alternating scale bands — two interleaved passes
+  for (let pass=0;pass<2;pass++) {
+    ctx.strokeStyle=pass===0?'#8a7040':'#5a4028';
+    ctx.lineWidth=11;
+    for (let i=n-1;i>=1;i-=4) {
+      if ((i%4===pass*2)) continue;
+      let a=segs[Math.min(i,n-1)], b=segs[Math.max(i-2,0)];
+      let mid=segs[Math.max(i-1,0)];
+      ctx.beginPath(); ctx.moveTo(a.x,a.y);
+      ctx.quadraticCurveTo(mid.x,mid.y,b.x,b.y);
+      ctx.stroke();
+    }
+  }
+
+  // Centre shine line along body
+  ctx.strokeStyle='rgba(160,130,60,0.25)'; ctx.lineWidth=4;
+  ctx.beginPath();
+  ctx.moveTo(segs[n-1].x,segs[n-1].y);
+  for (let i=n-2;i>=1;i--) {
+    let mx=(segs[i].x+segs[i-1].x)/2, my=(segs[i].y+segs[i-1].y)/2;
+    ctx.quadraticCurveTo(segs[i].x,segs[i].y,mx,my);
+  }
+  ctx.lineTo(segs[0].x,segs[0].y);
+  ctx.stroke();
+
+  // Rattle at tail
+  for (let i=0;i<3;i++) {
+    let seg=segs[n-1-i];
+    ctx.fillStyle=i%2===0?'#d4c896':'#b8a878';
+    ctx.beginPath(); ctx.arc(seg.x,seg.y,7+i*1.5,0,Math.PI*2); ctx.fill();
+  }
+
   ctx.globalAlpha=1;
-  let h=s.segs[0];
+
+  // ── Detailed head ──────────────────────────────────────────────
+  let h=segs[0];
   ctx.save(); ctx.translate(h.x,h.y); ctx.rotate(s.angle);
-  ctx.fillStyle='#6a5030'; ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle='#5a4020'; ctx.beginPath(); ctx.moveTo(16,0); ctx.lineTo(8,-10); ctx.lineTo(8,10); ctx.closePath(); ctx.fill();
-  ctx.fillStyle='#d4a020'; ctx.beginPath(); ctx.arc(-4,-7,5,0,Math.PI*2); ctx.arc(-4,7,5,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle='#0a0500'; ctx.beginPath(); ctx.arc(-4,-7,2,0,Math.PI*2); ctx.arc(-4,7,2,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle='#1a0a00'; ctx.beginPath(); ctx.arc(5,-5,2,0,Math.PI*2); ctx.arc(5,5,2,0,Math.PI*2); ctx.fill();
-  // Tongue flick rate scales with aggression state
-  let tf = s.tongueFlick || Math.sin(Date.now()/180)>0.2;
+
+  // Head base with gradient shading
+  let hg=ctx.createRadialGradient(-5,-7,1,0,0,19);
+  hg.addColorStop(0,'#9a8050'); hg.addColorStop(0.6,'#6a5030'); hg.addColorStop(1,'#3e2810');
+  ctx.fillStyle=hg; ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.fill();
+
+  // Triangular snout
+  let sg=ctx.createLinearGradient(0,0,18,0);
+  sg.addColorStop(0,'#7a6035'); sg.addColorStop(1,'#3e2810');
+  ctx.fillStyle=sg;
+  ctx.beginPath(); ctx.moveTo(16,0); ctx.lineTo(7,-9); ctx.lineTo(7,9); ctx.closePath(); ctx.fill();
+
+  // Amber slit eyes
+  ctx.fillStyle='#d4a020';
+  ctx.beginPath(); ctx.arc(-4,-7,5,0,Math.PI*2); ctx.arc(-4,7,5,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#0a0500';
+  ctx.beginPath(); ctx.arc(-4,-7,2,0,Math.PI*2); ctx.arc(-4,7,2,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.55)';
+  ctx.beginPath(); ctx.arc(-3,-8,1.5,0,Math.PI*2); ctx.arc(-3,6,1.5,0,Math.PI*2); ctx.fill();
+
+  // Heat pit nostrils
+  ctx.fillStyle='#1a0a00';
+  ctx.beginPath(); ctx.arc(5,-5,2,0,Math.PI*2); ctx.arc(5,5,2,0,Math.PI*2); ctx.fill();
+
+  // Directional shading on head
+  let hs=ctx.createRadialGradient(-5,-8,0,0,0,19);
+  hs.addColorStop(0,'rgba(255,220,140,0.22)'); hs.addColorStop(0.55,'rgba(0,0,0,0)'); hs.addColorStop(1,'rgba(0,0,0,0.3)');
+  ctx.fillStyle=hs; ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.fill();
+
+  // Tongue
+  let tf=s.tongueFlick||Math.sin(Date.now()/180)>0.2;
   if (s.state==='coil') tf=Math.sin(Date.now()/55)>0;
   if (tf) {
-    ctx.strokeStyle='#cc2020'; ctx.lineWidth=1.5;
+    ctx.strokeStyle='#cc2020'; ctx.lineWidth=1.5; ctx.lineCap='round';
     ctx.beginPath(); ctx.moveTo(16,0); ctx.lineTo(24,0); ctx.lineTo(28,-4); ctx.moveTo(24,0); ctx.lineTo(28,4); ctx.stroke();
   }
-  // Red warning glow when coiling to strike
+
+  // Coil warning glow
   if (s.state==='coil') {
     let p=0.5+0.5*Math.sin(Date.now()/80);
     ctx.strokeStyle=`rgba(220,60,20,${0.5+p*0.4})`; ctx.lineWidth=3;
@@ -1031,6 +1113,11 @@ function drawPlayer(g) {
 
   // Body
   ctx.fillStyle=bc; ctx.beginPath(); ctx.arc(0,0,14,0,Math.PI*2); ctx.fill();
+  // Directional sun shading — sun from world upper-left, rotated into player space
+  let sunA=-2.35-g.pAngle, shx=Math.cos(sunA)*7, shy=Math.sin(sunA)*7;
+  let bodyShade=ctx.createRadialGradient(shx,shy,0,0,0,20);
+  bodyShade.addColorStop(0,'rgba(255,225,150,0.28)'); bodyShade.addColorStop(0.55,'rgba(0,0,0,0)'); bodyShade.addColorStop(1,'rgba(0,0,0,0.32)');
+  ctx.fillStyle=bodyShade; ctx.beginPath(); ctx.arc(0,0,14,0,Math.PI*2); ctx.fill();
   ctx.fillStyle=pc; ctx.globalAlpha=0.4; ctx.beginPath(); ctx.arc(3,-6,6,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(-5,5,5,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
   ctx.fillStyle='rgba(200,120,60,0.3)';
   for (let i=0;i<6;i++) { let da=(i/6)*Math.PI*2; ctx.beginPath(); ctx.arc(Math.cos(da)*7,Math.sin(da)*7,2,0,Math.PI*2); ctx.fill(); }
@@ -1054,6 +1141,10 @@ function drawPlayer(g) {
   // Head
   ctx.save(); ctx.translate(14,0);
   ctx.fillStyle=bc; ctx.beginPath(); ctx.arc(0,0,10,0,Math.PI*2); ctx.fill();
+  // Sun shading on head (same direction, head-local coords)
+  let headShade=ctx.createRadialGradient(shx-2,shy,0,0,0,14);
+  headShade.addColorStop(0,'rgba(255,225,150,0.25)'); headShade.addColorStop(0.5,'rgba(0,0,0,0)'); headShade.addColorStop(1,'rgba(0,0,0,0.28)');
+  ctx.fillStyle=headShade; ctx.beginPath(); ctx.arc(0,0,10,0,Math.PI*2); ctx.fill();
   let sc2=g.threatActive?9:7;
   ctx.fillStyle=g.threatActive?'#3a1808':'#8a4020';
   for (let i=0;i<sc2;i++) {
@@ -1146,7 +1237,9 @@ function drawHawkEscapeUI(g) {
 
 function drawWorld() {
   let g=gs;
-  ctx.save(); ctx.scale(DPR,DPR); ctx.translate(-g.camX,-g.camY);
+  let shx=g.shakeAmt?(Math.random()-0.5)*g.shakeAmt*14:0;
+  let shy=g.shakeAmt?(Math.random()-0.5)*g.shakeAmt*14:0;
+  ctx.save(); ctx.scale(DPR,DPR); ctx.translate(-g.camX+shx,-g.camY+shy);
 
   // Background
   ctx.fillStyle='#c9a96a'; ctx.fillRect(g.camX,g.camY,window.innerWidth,window.innerHeight);
@@ -1200,17 +1293,23 @@ function drawWorld() {
     ctx.beginPath(); ctx.arc(p.x,p.y,p.r*p.life,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
   }
 
+  // Critter + snake shadows (drawn before entities for correct layering)
+  for (let c of g.critters) drawShadow(c.x,c.y,10,5,0.18);
+  for (let s of g.snakes) drawShadow(s.segs[0].x,s.segs[0].y,22,9,0.2);
+  if (g.burrowState!=='burrowed') drawShadow(g.px,g.py,18*g.drgSize,8*g.drgSize,0.26);
   // Critters
   for (let c of g.critters) drawCritter(c);
 
   // Snakes
   for (let s of g.snakes) drawSnake(s);
 
-  // Hawk shadow
+  // Hawk shadow (wing-shaped, scales with altitude)
   if (g.hawk && g.hawk.phase!=='carry') {
-    let h=g.hawk, ss=(1-h.altitude)*80+15;
-    ctx.globalAlpha=(1-h.altitude)*0.35; ctx.fillStyle='#000';
-    ctx.beginPath(); ctx.arc(h.x,h.y,ss,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+    let h=g.hawk, fade=(1-h.altitude);
+    ctx.save(); ctx.globalAlpha=fade*0.32;
+    ctx.translate(h.x+fade*20, h.y+fade*10); ctx.scale(1+fade*0.5, 0.3);
+    ctx.fillStyle='#000'; ctx.beginPath(); ctx.arc(0,0,55+fade*30,0,Math.PI*2); ctx.fill();
+    ctx.restore();
   }
 
   // Player
@@ -1275,6 +1374,7 @@ function loop(ts) {
       updateHawk(dt);
       checkCacti();
       checkSquish();
+      updateScreenShake(dt);
       updateParticles(dt);
       updateHUD();
     } else if (gs.state==='dead') {
